@@ -1,16 +1,62 @@
 import { agent } from "@llamaindex/workflow";
+import { Settings, FunctionTool } from "llamaindex";
 import { getIndex } from "./data";
+import { initSettings } from "./settings";
 
 export const workflowFactory = async (reqBody: any) => {
+  // Garante que Settings está inicializado
+  if (!Settings.llm) {
+    console.log("Settings.llm não encontrado, inicializando...");
+    initSettings();
+  }
+  
+  console.log("Settings.llm no workflow:", Settings.llm?.constructor.name);
+  
   const index = await getIndex(reqBody?.data);
-
-  const queryEngineTool = index.queryTool({
-    metadata: {
-      name: "query_document",
-      description: `This tool can retrieve information about Apple and Tesla financial data`,
-    },
-    includeSourceNodes: true,
+  const queryEngine = index.asQueryEngine({
+    similarityTopK: 3,
   });
 
-  return agent({ tools: [queryEngineTool] });
+  const queryDocumentTool = FunctionTool.from(
+    async ({ query }: { query: string }) => {
+      console.log("\n🔍 RAG CHAMADO! Query:", query);
+      const response = await queryEngine.query({ query });
+      console.log("✅ RAG RETORNOU:", response.response?.substring(0, 150));
+      if (response.sourceNodes && response.sourceNodes.length > 0) {
+        console.log(`\n📚 ${response.sourceNodes.length} fontes encontradas:\n`);
+        response.sourceNodes.forEach((node: any, idx: number) => {
+          console.log(`  [${idx + 1}] Página ${node.node?.metadata?.page_number} - Score: ${node.score?.toFixed(4)}`);
+        });
+        
+        // Mostra o conteúdo completo da primeira fonte
+        const firstNode = response.sourceNodes[0];
+        console.log("\n" + "=".repeat(80));
+        console.log("📄 CONTEÚDO DA PRIMEIRA FONTE (Página " + firstNode.node?.metadata?.page_number + "):");
+        console.log("=".repeat(80));
+        console.log(firstNode.node?.text || "Texto não disponível");
+        console.log("=".repeat(80) + "\n");
+      }
+      return response.response;
+    },
+    {
+      name: "query_document",
+      description: "Use esta ferramenta OBRIGATORIAMENTE para responder perguntas sobre a Base Nacional Comum Curricular (BNCC). Esta ferramenta tem acesso ao documento completo da BNCC.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "A pergunta sobre a BNCC",
+          },
+        },
+        required: ["query"],
+      },
+    }
+  );
+
+  return agent({ 
+    tools: [queryDocumentTool],
+    llm: Settings.llm,
+    verbose: true,
+  });
 };
