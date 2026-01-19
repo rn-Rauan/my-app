@@ -19,11 +19,11 @@ export const workflowFactory = async (reqBody: any) => {
 
   const queryDocumentTool = FunctionTool.from(
     async ({ query }: { query: string }) => {
-      console.log("\n🔍 RAG CHAMADO! Query:", query);
+      console.log("\n RAG CHAMADO! Query:", query);
       const response = await queryEngine.query({ query });
-      console.log("✅ RAG RETORNOU:", response.response?.substring(0, 150));
+      console.log(" RAG RETORNOU:", response.response?.substring(0, 150));
       if (response.sourceNodes && response.sourceNodes.length > 0) {
-        console.log(`\n📚 ${response.sourceNodes.length} fontes encontradas:\n`);
+        console.log(`\n ${response.sourceNodes.length} fontes encontradas:\n`);
         response.sourceNodes.forEach((node: any, idx: number) => {
           console.log(`  [${idx + 1}] Página ${node.node?.metadata?.page_number} - Score: ${node.score?.toFixed(4)}`);
         });
@@ -31,7 +31,7 @@ export const workflowFactory = async (reqBody: any) => {
         // Mostra o conteúdo completo da primeira fonte
         const firstNode = response.sourceNodes[0];
         console.log("\n" + "=".repeat(80));
-        console.log("📄 CONTEÚDO DA PRIMEIRA FONTE (Página " + firstNode.node?.metadata?.page_number + "):");
+        console.log(" CONTEÚDO DA PRIMEIRA FONTE (Página " + firstNode.node?.metadata?.page_number + "):");
         console.log("=".repeat(80));
         console.log(firstNode.node?.text || "Texto não disponível");
         console.log("=".repeat(80) + "\n");
