@@ -430,7 +430,7 @@ Exemplos:
 
 | Métrica                 | Valor           | Observação                      |
 |-------------------------|-----------------|---------------------------------|
-| Tempo médio de resposta | 3-5 segundos    | Depende da complexidade do tema |
+| Tempo médio de resposta | 10-30 segundos   | Depende da complexidade do tema |
 | Queries por tema        | 3 quries        | Estratégia multi-query          |
 | Documentos recuperados  | 10 únicos       | Top 10 páginas mais relevantes  |
 | Habilidades retornadas  | 2               | As mais relevantes              |

@@ -1,14 +1,16 @@
 {
   "name": "my-app",
   "version": "0.1.0",
+  
   "scripts": {
-    "generate": "tsx src/generate.ts datasource",
-    "generate:datasource": "tsx src/generate.ts datasource",
-    "generate:ui": "tsx src/generate.ts ui",
-    "dev": "nodemon",
-    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/api.js",
     "api": "tsx src/api.ts",
-    "eject": "llamaindex-server eject"
+    "dev": "tsx src/api.ts"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   },
   "dependencies": {
     "@llamaindex/ollama": "^0.1.23",
