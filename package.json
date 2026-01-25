@@ -1,9 +1,10 @@
 {
   "name": "my-app",
   "version": "0.1.0",
+  "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/api.js",
+    "start": "tsx dist/api.js",
     "api": "tsx src/api.ts",
     "dev": "tsx src/api.ts"
   },
