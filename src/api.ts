@@ -9,474 +9,64 @@
  * - OpenAI: GPT-4o-mini para geração de texto e text-embedding-3-small para embeddings
  * - Express: Servidor HTTP para API REST
  * 
- * @author Sistema RAG BNCC
- * @version 1.0.0
+ * @version 2.0.0 - Arquitetura Refatorada
  */
 
 import express, { Request, Response } from "express";
 import cors from "cors";
 import "dotenv/config";
 import { initSettings } from "./app/settings";
-import { getIndex } from "./app/data";
 import { Settings } from "llamaindex";
+import { gerarContextoController } from "./controllers/context.controller";
 
-// Inicialização do servidor Express
+// ==================== CONFIGURAÇÃO DO SERVIDOR ====================
+
 const app = express();
-const PORT = process.env.API_PORT || 3001;
+const PORT = process.env.API_PORT || 5251;
+
+// Opções do CORS para produção
+const corsOptions = {
+  origin: process.env.API_CENTRAL || false, // Permite apenas requisições deste domínio
+  optionsSuccessStatus: 200 // Para navegadores mais antigos
+};
 
 // Middlewares
-app.use(cors()); // Permite requisições de qualquer origem
-app.use(express.json()); // Parser para JSON no body das requisições
+app.use(cors(corsOptions)); // Usa as opções configuradas
+app.use(express.json());
 
 // Inicializa configurações do LLM e embeddings
 initSettings();
 console.log("✅ Settings inicializado");
 
-// Cache do query engine (inicializado sob demanda)
-let queryEngine: any = null;
-
-/**
- * Inicializa o Query Engine customizado com retriever semântico
- * 
- * O Query Engine é responsável por:
- * 1. Carregar o índice vetorial da BNCC do storage
- * 2. Configurar retriever com busca por similaridade (top 20 resultados)
- * 3. Sintetizar respostas usando os documentos mais relevantes
- * 
- * @returns {Promise<Object>} Query engine configurado e pronto para uso
- */
-async function initializeQueryEngine() {
-  if (!queryEngine) {
-    const index = await getIndex();
-    
-    // Query engine customizado com retriever de alta precisão
-    queryEngine = {
-      index,
-      async query(params: { query: string }) {
-        // Busca semântica: encontra os 20 trechos mais similares no vetor store
-        const retriever = index.asRetriever({ 
-          similarityTopK: 20, // Busca mais resultados para aplicar filtros posteriormente
-        });
-        
-        const nodes = await retriever.retrieve(params.query);
-        
-        // Sintetiza resposta
-        const responseSynthesizer = index.asQueryEngine().responseSynthesizer;
-        const response = await responseSynthesizer.synthesize({
-          query: params.query,
-          nodes,
-        });
-        
-        return {
-          response: response.response,
-          sourceNodes: nodes,
-        };
-      }
-    };
-    
-    console.log("✅ Query Engine inicializado com retriever customizado");
-  }
-  return queryEngine;
-}
-
-/**
- * Aplica filtro híbrido (semântico + palavras-chave) nos nós recuperados
- * 
- * Este filtro aumenta a precisão do RAG combinando:
- * - Similaridade semântica (scores do embedding)
- * - Correspondência de palavras-chave (tema, disciplina, série)
- * - Boost para matches exatos de disciplina (+3 pontos)
- * - Boost para matches de ano/série (+2 pontos)
- * 
- * @param nodes - Nós retornados pelo retriever semântico
- * @param tema - Tema educacional buscado
- * @param disciplina - Disciplina da BNCC (ex: "MATEMÁTICA")
- * @param serie - Série escolar (ex: "3º ANO" ou "2º SÉRIE")
- * @returns Array de nós filtrados e ordenados por relevância
- */
-function filtrarNodesPorRelevancia(
-  nodes: any[],
-  tema: string,
-  disciplina: string,
-  serie: string
-): any[] {
-  // Extrai palavras-chave relevantes do contexto da busca
-  const palavrasChave = [
-    ...tema.toLowerCase().split(' '),
-    disciplina.toLowerCase(),
-    ...serie.toLowerCase().split(' ').filter(p => p.match(/\d/)), // Números da série (ex: "3" de "3º ANO")
-  ];
-  
-  return nodes
-    .map((node: any) => {
-      const texto = node.node?.text?.toLowerCase() || '';
-      
-      // Conta quantas palavras-chave aparecem
-      let matchCount = 0;
-      for (const palavra of palavrasChave) {
-        if (palavra.length > 2 && texto.includes(palavra)) {
-          matchCount++;
-        }
-      }
-      
-      // Boost se menciona a disciplina
-      if (texto.includes(disciplina.toLowerCase())) {
-        matchCount += 3;
-      }
-      
-      // Boost se menciona ano/série específico
-      const anoMatch = serie.match(/(\d+)º/);
-      if (anoMatch && texto.includes(anoMatch[1])) {
-        matchCount += 2;
-      }
-      
-      return {
-        ...node,
-        matchCount,
-        boostedScore: (Math.abs(node.score || 0) * 100) + matchCount
-      };
-    })
-    .filter((node: any) => node.matchCount > 0) // Remove sem matches
-    .sort((a: any, b: any) => b.boostedScore - a.boostedScore);
-}
-
-/**
- * Extrai códigos de habilidades da BNCC dos nós recuperados
- * 
- * A BNCC usa códigos padronizados para identificar habilidades:
- * - Ensino Fundamental: EF[ano][disciplina][número] (ex: EF03MA01)
- *   Formato: EF + 2 dígitos (ano) + 2 letras (disciplina) + 2 dígitos (sequencial)
- * - Ensino Médio: EM[etapa][disciplina][número] (ex: EM13MAT302)
- *   Formato: EM + 2 dígitos (etapa) + 3 letras (área) + 2-3 dígitos (sequencial)
- * 
- * A função:
- * 1. Busca códigos usando regex nos textos dos nós
- * 2. Extrai a descrição que segue cada código
- * 3. Remove duplicatas mantendo a descrição mais completa
- * 4. Retorna apenas as 2 habilidades mais relevantes
- * 
- * @param nodes - Nós do RAG contendo texto da BNCC
- * @returns Array com até 2 habilidades (código + descrição)
- */
-function extrairHabilidadesBNCC(nodes: any[]): Array<{codigo: string, descricao: string}> {
-  const habilidades: Map<string, string> = new Map();
-  
-  // Regex para capturar códigos de habilidades (Fundamental e Médio)
-  // EF: EF03MA01 (EF + 2 dígitos + 2 letras + 2 dígitos)
-  // EM: EM13MAT302 (EM + 2 dígitos + 3 letras + 2-3 dígitos)
-  const regex = /(EF\d{2}[A-Z]{2}\d{2}|EM\d{2}[A-Z]{3}\d{2,3})/g;
-  
-  for (const node of nodes) {
-    const texto = node.node?.text || '';
-    let match;
-    
-    while ((match = regex.exec(texto)) !== null) {
-      const codigo = match[0]; // match[0] é o código completo (EF03MA01 ou EM13MAT302)
-      
-      // Extrai a descrição: busca texto após o código até encontrar nova linha ou outro código
-      const startIdx = match.index + codigo.length;
-      let endIdx = texto.indexOf('\n', startIdx);
-      if (endIdx === -1) endIdx = texto.length;
-      
-      // Verifica se há outro código antes da quebra de linha
-      const nextMatch = texto.substring(startIdx, endIdx).search(/(EF\d{2}[A-Z]{2}\d{2}|EM\d{2}[A-Z]{3}\d{2,3})/);
-      if (nextMatch !== -1) {
-        endIdx = startIdx + nextMatch;
-      }
-      
-      let descricao = texto.substring(startIdx, endIdx)
-        .replace(/^\s*[-–—):\s]+/, '') // Remove caracteres iniciais
-        .trim();
-      
-      // Limita descrição a 200 chars
-      if (descricao.length > 200) {
-        descricao = descricao.substring(0, 200) + '...';
-      }
-      
-      // Só adiciona se tiver descrição válida
-      if (descricao.length > 10) {
-        // Guarda apenas se ainda não tem ou se a descrição é maior
-        if (!habilidades.has(codigo) || habilidades.get(codigo)!.length < descricao.length) {
-          habilidades.set(codigo, descricao);
-        }
-      }
-    }
-  }
-  
-  // Retorna apenas as 2 primeiras habilidades (mais relevantes)
-  return Array.from(habilidades.entries())
-    .slice(0, 2)
-    .map(([codigo, descricao]) => ({
-      codigo,
-      descricao
-    }));
-}
-
-/**
- * Executa estratégia multi-query para melhorar precisão do RAG
- * 
- * Problema: Uma única query pode não capturar todos os aspectos relevantes da BNCC
- * Solução: Executar 3 queries complementares e agregar os melhores resultados
- * 
- * Estratégia das queries:
- * 1. Foco em habilidades específicas do tema
- * 2. Busca por objetos de conhecimento relacionados
- * 3. Consulta a competências gerais da etapa de ensino
- * 
- * Benefícios:
- * - Maior cobertura do conteúdo da BNCC
- * - Reduz viés de uma única formulação de busca
- * - Melhora recall mantendo precision
- * 
- * @param tema - Tema educacional (ex: "Números")
- * @param disciplina - Disciplina (ex: "MATEMÁTICA")
- * @param serie - Série específica (ex: "3º ANO")
- * @param anoSerie - Etapa de ensino ("Ensino fundamental" ou "Ensino médio")
- * @param engine - Query engine configurado
- * @returns Objeto com respostas agregadas, nós únicos e habilidades extraídas
- */
-async function consultarBNCCMultiplasQueries(
-  tema: string,
-  disciplina: string,
-  serie: string,
-  anoSerie: string,
-  engine: any
-) {
-  // Estratégia multi-query: 3 abordagens complementares
-  const queries = [
-    // Query 1: Foco direto em habilidades
-    `${serie} ${disciplina} ${tema} habilidades`,
-    
-    // Query 2: Busca por objetos de conhecimento (estrutura da BNCC)
-    `${disciplina} ${serie} ${tema} objetos conhecimento`,
-    
-    // Query 3: Consulta competências gerais da etapa
-    `${anoSerie} ${disciplina} competências ${tema}`,
-  ];
-
-  console.log("   Executando múltiplas queries para melhor precisão...");
-  
-  const results = [];
-  for (let i = 0; i < queries.length; i++) {
-    console.log(`   Query ${i + 1}: "${queries[i]}"`);
-    const response = await engine.query({ query: queries[i] });
-    results.push({
-      query: queries[i],
-      response: response.response,
-      nodes: response.sourceNodes || []
-    });
-  }
-
-  // Agregar melhores resultados
-  const allNodes = results.flatMap(r => r.nodes);
-  
-  // Ordenar por score (descendente para scores positivos)
-  allNodes.sort((a: any, b: any) => {
-    const scoreA = Math.abs(a.score || 0);
-    const scoreB = Math.abs(b.score || 0);
-    return scoreB - scoreA;
-  });
-
-  // Pegar top 10 únicos
-  const uniqueNodes = [];
-  const seenPages = new Set();
-  for (const node of allNodes) {
-    const page = node.node?.metadata?.page_number;
-    if (page && !seenPages.has(page) && uniqueNodes.length < 10) {
-      seenPages.add(page);
-      uniqueNodes.push(node);
-    }
-  }
-
-  // Combinar respostas (resumida)
-  const combinedResponse = results.map(r => r.response).join('\n\n');
-  
-  // Extrair habilidades dos nós
-  const habilidades = extrairHabilidadesBNCC(uniqueNodes);
-
-  return {
-    response: combinedResponse,
-    sourceNodes: uniqueNodes,
-    queries: queries,
-    habilidades: habilidades  // ← NOVO!
-  };
-}
+// ==================== ROTAS ====================
 
 /**
  * POST /api/gerar-contexto
- * 
- * Endpoint principal que gera contexto pedagógico estruturado a partir da BNCC
- * 
- * FLUXO DE PROCESSAMENTO:
- * 1. Validação dos parâmetros de entrada (tema, disciplina, série)
- * 2. Consulta RAG: busca semântica multi-query na BNCC
- * 3. Extração automática de códigos de habilidades (EF/EM)
- * 4. Geração de contexto enriquecido com IA (cultura digital integrada)
- * 5. Retorno estruturado em JSON para consumo por outras APIs
- * 
- * @route POST /api/gerar-contexto
- * @param {string} tema - Tema educacional a ser trabalhado (obrigatório)
- * @param {string} disciplina - Disciplina da BNCC (obrigatório)
- * @param {string} serie - Série ou ano escolar (obrigatório)
- * @param {string} [bimestre] - Bimestre do ano letivo (opcional)
- * 
- * @returns {Object} JSON com contexto pedagógico, habilidades, cultura digital e fontes
- * @throws {400} Se parâmetros obrigatórios estiverem ausentes
- * @throws {500} Se houver erro no processamento RAG ou LLM
+ * Gera contexto pedagógico estruturado a partir da BNCC
  */
-app.post("/api/gerar-contexto", async (req: Request, res: Response) => {
-  try {
-    const { tema, disciplina, serie, bimestre } = req.body;
+app.post("/api/gerar-contexto", gerarContextoController);
 
-    // Validação de parâmetros obrigatórios
-    if (!tema || tema.trim() === "") {
-      return res.status(400).json({ error: "Tema é obrigatório" });
-    }
-    if (!disciplina || disciplina.trim() === "") {
-      return res.status(400).json({ error: "Disciplina é obrigatória" });
-    }
-    if (!serie || serie.trim() === "") {
-      return res.status(400).json({ error: "Série é obrigatória" });
-    }
-      
-    console.log(`\n🔍 Gerando contexto para: ${tema}`);
-    console.log(`   Disciplina: ${disciplina || 'não especificada'}`);
-    console.log(`   Série: ${serie || 'não especificada'}`);
-
-    const engine = await initializeQueryEngine();
-
-    let anoSerie = serie as string;
-    if( anoSerie.trim().toUpperCase().includes("SÉRIE") || anoSerie.trim().toUpperCase().includes("SERIE")){
-      anoSerie = "Ensino médio"
-    }else if( anoSerie.trim().toUpperCase().includes("ANO")){
-      anoSerie = "Ensino fundamental"
-    }
-
-    // 1. Consulta a BNCC com múltiplas queries para melhor precisão
-    const bnccResponse = await consultarBNCCMultiplasQueries(
-      tema,
-      disciplina,
-      serie,
-      anoSerie,
-      engine
-    );
-
-    console.log(`✅ BNCC consultada - ${bnccResponse.sourceNodes?.length || 0} fontes únicas`);
-    console.log(`✅ Habilidades encontradas: ${bnccResponse.habilidades?.length || 0}`);
-    
-    // Log das habilidades encontradas
-    if (bnccResponse.habilidades && bnccResponse.habilidades.length > 0) {
-      console.log("   Códigos de habilidades:");
-      bnccResponse.habilidades.forEach((h: any) => {
-        console.log(`   • ${h.codigo}: ${h.descricao.substring(0, 80)}...`);
-      });
-    }
-    
-    // Log dos scores para debug
-    if (bnccResponse.sourceNodes && bnccResponse.sourceNodes.length > 0) {
-      console.log("\n   Top 5 scores:");
-      bnccResponse.sourceNodes.slice(0, 5).forEach((node: any, i: number) => {
-        const score = Math.abs(node.score || 0);
-        console.log(`   [${i + 1}] Página ${node.node?.metadata?.page_number} - Score: ${score.toFixed(4)}`);
-      });
-      
-      // Aviso se os scores são muito baixos
-      const bestScore = Math.abs(bnccResponse.sourceNodes[0]?.score || 0);
-      if (bestScore < 0.1) {
-        console.log(`   ⚠️  Scores muito baixos (${bestScore.toFixed(4)}). RAG pode não estar encontrando conteúdo relevante.`);
-        console.log(`   💡 Dica: Tente termos mais específicos ou verifique se o tema existe na BNCC.`);
-      } else if (bestScore >= 0.5) {
-        console.log(`   ✅ Scores bons! RAG encontrou conteúdo relevante.`);
-      }
-    }
-
-    // 2. Gera contexto enriquecido com cultura digital
-    const habilidadesTexto = bnccResponse.habilidades
-      ?.map(h => `${h.codigo}: ${h.descricao}`)
-      .join('\n') || 'Nenhuma habilidade específica encontrada.';
-    
-    const prompt = `Você é um especialista em educação, BNCC e cultura digital.
-
-TEMA: ${tema}
-DISCIPLINA: ${disciplina}
-SÉRIE: ${serie}
-
-HABILIDADES DA BNCC ENCONTRADAS:
-${habilidadesTexto}
-
-TAREFA: Gere um contexto pedagógico CONCISO para ser usado como entrada de outro prompt.
-
-FORMATO (JSON puro, sem markdown):
-{
-  "tema": "${tema}",
-  "serie": "${serie}",
-  "disciplina": "${disciplina}",
-  "habilidadesBNCC": [
-    {"codigo": "EF03MA01", "descricao": "descrição breve"}
-  ],
-  "contextoPedagogico": {
-    "abordagem": "descrição concisa da abordagem pedagógica (ex: introdução conceitual com exemplos do cotidiano)",
-    "nivelCognitivo": "nível esperado (ex: compreensão e aplicação)",
-    "estrategias": ["máximo 3 estratégias de ensino"],
-    "metodologias": ["máximo 3 metodologias aplicáveis"]
-  },
-  "culturaDigital": {
-    "relacao": "relação com tecnologia em 1 frase",
-    "tecnologias": ["máximo 3 ferramentas digitais"],
-    "recursos": ["máximo 3 recursos REAIS"],
-    "competenciasDigitais": ["máximo 2 competências"]
-  },
-  "sugestoesConteudo": ["máximo 4 tópicos"]
-}
-
-Seja EXTREMAMENTE CONCISO. Retorne APENAS o JSON.`;
-
-    const contextoResponse = await Settings.llm!.complete({ prompt });
-
-    console.log("✅ Contexto gerado com cultura digital");
-
-    // Fontes da BNCC consultadas
-    const fontes = bnccResponse.sourceNodes?.map((node: any) => ({
-      pagina: node.node?.metadata?.page_number,
-      score: node.score?.toFixed(4),
-    })) || [];
-
-    res.json({
-      contexto: JSON.parse(contextoResponse.text),
-      bnccReferencia: bnccResponse.response,
-      fontes,
-      metadata: {
-        tema,
-        disciplina: disciplina || null,
-        serie: serie || null,
-        bimestre: bimestre || null,
-        timestamp: new Date().toISOString(),
-      }
-    });
-
-  } catch (error: any) {
-    console.error("❌ Erro:", error);
-    res.status(500).json({
-      error: "Erro ao gerar contexto",
-      details: error.message
-    });
-  }
-});
-
-// Health check
+/**
+ * GET /api/health
+ * Health check da API
+ */
 app.get("/api/health", (req: Request, res: Response) => {
   res.json({
     status: "ok",
     service: "RAG - BNCC + Cultura Digital",
+    version: "2.0.0",
     llm: Settings.llm?.constructor.name,
     timestamp: new Date().toISOString()
   });
 });
 
+// ==================== INICIALIZAÇÃO ====================
+
 app.listen(PORT, () => {
   console.log(`\n🚀 API RAG rodando em http://localhost:${PORT}`);
-  console.log(`\n📡 Endpoint principal:`);
-  console.log(`   POST /api/gerar-contexto`);
-  console.log(`   GET  /api/health\n`);
-  console.log(`📚 Base: BNCC + Cultura Digital\n`);
+  console.log(`\n📡 Endpoints disponíveis:`);
+  console.log(`   POST /api/gerar-contexto - Gera contexto pedagógico`);
+  console.log(`   GET  /api/health          - Health check`);
+  console.log(`\n📚 Base de dados: BNCC + Cultura Digital`);
+  console.log(`🏗️  Arquitetura: Modular (Services + Controllers + Utils)\n`);
 });
