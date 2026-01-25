@@ -1,5 +1,5 @@
 import { agent } from "@llamaindex/workflow";
-import { Settings, FunctionTool } from "llamaindex";
+import { Settings, FunctionTool, MetadataMode } from "llamaindex";
 import { getIndex } from "./data";
 import { initSettings } from "./settings";
 
@@ -33,7 +33,7 @@ export const workflowFactory = async (reqBody: any) => {
         console.log("\n" + "=".repeat(80));
         console.log(" CONTEÚDO DA PRIMEIRA FONTE (Página " + firstNode.node?.metadata?.page_number + "):");
         console.log("=".repeat(80));
-        console.log(firstNode.node?.text || "Texto não disponível");
+        console.log(firstNode.node?.getContent(MetadataMode.NONE) || "Texto não disponível");
         console.log("=".repeat(80) + "\n");
       }
       return response.response;
@@ -56,7 +56,7 @@ export const workflowFactory = async (reqBody: any) => {
 
   return agent({ 
     tools: [queryDocumentTool],
-    llm: Settings.llm,
+    llm: Settings.llm as any,
     verbose: true,
   });
 };
