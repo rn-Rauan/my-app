@@ -5,7 +5,7 @@
 
 import { getIndex } from "../app/data";
 import { RAGQueryResult, MultiQueryResult } from "../types";
-import { detectarNivelEscolar } from "../utils/validators";
+import { detectarNivelEscolar, detectarAreaBNCC, extrairNumeroAno } from "../utils/validators";
 import { 
   filtrarNodesPorRelevancia, 
   extrairHabilidadesBNCC, 
@@ -71,13 +71,42 @@ export async function consultarBNCC(
 ): Promise<MultiQueryResult> {
   const engine = await initializeQueryEngine();
   const nivelEscolar = detectarNivelEscolar(serie);
+  const areaBNCC = detectarAreaBNCC(disciplina, nivelEscolar);
+  const anoEsperado = extrairNumeroAno(serie);
   
-  // Gera 3 queries complementares
-  const queries = [
-    `${anoSerie} ${serie} ${disciplina} ${tema} habilidades`,
-    `${anoSerie} ${disciplina} ${serie} ${tema} objetos conhecimento`,
-    `${anoSerie} ${disciplina} competências ${tema} ${serie}`,
-  ];
+  // Log para debug
+  console.log(`   📚 Disciplina: ${disciplina} → Código BNCC: ${areaBNCC || "não identificada"} (${nivelEscolar})`);
+  if (anoEsperado !== null) {
+    console.log(`   📅 Série: ${serie} → Ano: ${anoEsperado}`);
+  }
+  
+  // Gera queries mais específicas incluindo o código da área quando disponível
+  const queries = [];
+  
+  if (nivelEscolar === "medio" && areaBNCC) {
+    // Para Ensino Médio com área identificada, inclui o código (CHS, LGG, MAT, CNT)
+    queries.push(
+      `${anoSerie} ${serie} ${areaBNCC} ${disciplina} ${tema} habilidades competências`,
+      `Ensino Médio ${areaBNCC} ${tema} objetos conhecimento`,
+      `EM13${areaBNCC} ${disciplina} ${tema}`,
+    );
+  } else if (nivelEscolar === "fundamental" && anoEsperado !== null && areaBNCC) {
+    // Para Ensino Fundamental com ano específico e disciplina identificada
+    // Usa código de 2 letras: CI (Ciências), HI (História), GE (Geografia), etc.
+    const codigoAno = anoEsperado.toString().padStart(2, '0'); // 9 → "09"
+    queries.push(
+      `${serie} ${disciplina} ${tema} habilidades EF${codigoAno}${areaBNCC}`,
+      `EF${codigoAno}${areaBNCC} ${disciplina} ${tema}`,
+      `${anoEsperado}º ano ${disciplina} ${tema} objetos conhecimento`,
+    );
+  } else {
+    // Queries genéricas para outros casos
+    queries.push(
+      `${anoSerie} ${serie} ${disciplina} ${tema} habilidades`,
+      `${anoSerie} ${disciplina} ${serie} ${tema} objetos conhecimento`,
+      `${anoSerie} ${disciplina} competências ${tema} ${serie}`,
+    );
+  }
 
   console.log("   Executando múltiplas queries...");
   
@@ -96,9 +125,9 @@ export async function consultarBNCC(
   // Agrega todos os nós retornados
   const allNodes = results.flatMap(r => r.nodes);
   
-  // Aplica filtros de relevância por nível escolar
-  console.log(`   🔍 Aplicando filtro de nível escolar: ${nivelEscolar}`);
-  const nodesFiltrados = filtrarNodesPorRelevancia(allNodes, tema, disciplina, serie);
+  // Aplica filtros de relevância por nível escolar, área e ano
+  console.log(`   🔍 Aplicando filtros: nível=${nivelEscolar}, área=${areaBNCC || "N/A"}, ano=${anoEsperado || "N/A"}`);
+  const nodesFiltrados = filtrarNodesPorRelevancia(allNodes, tema, disciplina, serie, areaBNCC);
   
   console.log(`   📊 Nós: ${allNodes.length} → ${nodesFiltrados.length} (após filtro)`);
   
@@ -108,8 +137,8 @@ export async function consultarBNCC(
   // Combina respostas
   const combinedResponse = results.map(r => r.response).join('\n\n');
   
-  // Extrai habilidades (apenas do nível correto)
-  const habilidades = extrairHabilidadesBNCC(uniqueNodes, nivelEscolar);
+  // Extrai habilidades (apenas do nível, área e ano corretos)
+  const habilidades = extrairHabilidadesBNCC(uniqueNodes, nivelEscolar, areaBNCC, anoEsperado);
 
   return {
     response: combinedResponse,
