@@ -88,10 +88,10 @@ const MAPEAMENTO_FUNDAMENTAL: Record<string, string> = {
   "artes": "AR",
   "educação física": "EF",
   "educacao fisica": "EF",
-  "inglês": "LI",
-  "ingles": "LI",
-  "língua inglesa": "LI",
+  "lingua inglêsa": "LI",
   "lingua inglesa": "LI",
+  "língua inglesa": "LI",
+  "inglês": "LI",
   "espanhol": "LI",
   
   // Matemática
@@ -233,32 +233,29 @@ export function extrairAnoDaHabilidade(codigo: string): number | null {
   }
   
   const digitos = match[1];
+  const d1 = parseInt(digitos[0], 10);
+  const d2 = parseInt(digitos[1], 10);
   
-  // Para códigos como EF67 (anos 6 e 7), pega o primeiro dígito
-  const primeiroDigito = parseInt(digitos[0], 10);
-  
-  // Se os dois dígitos forem iguais (EF66, EF77), retorna o ano
-  if (digitos[0] === digitos[1]) {
-    return primeiroDigito;
+  // Se começa com 0 (01-09), o ano é o segundo dígito
+  if (d1 === 0) {
+    return d2;
   }
   
-  // Se for uma sequência (EF67, EF89), retorna o primeiro ano
-  return primeiroDigito;
+  // Se for uma sequência (EF67, EF89, EF15), retorna o primeiro ano como referência
+  return d1;
 }
 
 /**
  * Valida se a habilidade é do ano correto
  * 
  * Para Ensino Fundamental, valida se o código é do ano específico ou próximo.
- * Para Ensino Médio, sempre retorna true (não há ano específico).
- * 
- * Tolerância: aceita ano exato ou ±1 ano
+ * Suporta códigos de ano único (EF06) e ciclos (EF15, EF69, EF67).
  * 
  * @example
  * validarHabilidadeAno("EF09GE01", 9) → true
- * validarHabilidadeAno("EF08GE01", 9) → true (tolerância de ±1)
- * validarHabilidadeAno("EF06GE01", 9) → false (diferença de 3 anos)
- * validarHabilidadeAno("EM13CHS101", 1) → true (ensino médio não tem ano específico)
+ * validarHabilidadeAno("EF06GE01", 9) → false
+ * validarHabilidadeAno("EF15LP01", 3) → true (está no ciclo 1-5)
+ * validarHabilidadeAno("EF69LP01", 7) → true (está no ciclo 6-9)
  */
 export function validarHabilidadeAno(
   codigo: string,
@@ -274,16 +271,30 @@ export function validarHabilidadeAno(
     return true;
   }
   
-  const anoHabilidade = extrairAnoDaHabilidade(codigo);
+  const match = codigo.match(/^EF(\d{2})/);
+  if (!match) {
+    return true; // Se não conseguir parsear, aceita por segurança
+  }
   
-  // Se não conseguiu extrair o ano da habilidade, aceita
-  if (anoHabilidade === null) {
+  const digitos = match[1];
+  const d1 = parseInt(digitos[0], 10);
+  const d2 = parseInt(digitos[1], 10);
+  
+  // Caso 1: Ano único (01-09)
+  if (d1 === 0) {
+    // Aceita ano exato ou com tolerância de ±1 ano
+    // Ex: EF06 aceita anos 5, 6, 7
+    return Math.abs(d2 - anoEsperado) <= 1;
+  }
+  
+  // Caso 2: Ciclo/Faixa (15, 69, 67, 89)
+  // Verifica se o ano esperado está dentro do intervalo [d1, d2]
+  // Ex: EF15 (1-5) aceita ano 3
+  if (anoEsperado >= d1 && anoEsperado <= d2) {
     return true;
   }
   
-  // Aceita ano exato ou com tolerância de ±1 ano
-  const diferenca = Math.abs(anoHabilidade - anoEsperado);
-  return diferenca <= 1;
+  return false;
 }
 
 /**

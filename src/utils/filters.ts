@@ -24,6 +24,8 @@ const PONTUACAO = {
   BOOST_MENCIONOU_NIVEL_CORRETO: 4,
   BOOST_DISCIPLINA: 3,
   BOOST_SERIE: 2,
+  BOOST_TEMA_EXATO: 80, // Aumentado para garantir prioridade ao tema exato
+  BOOST_TEMA_PARCIAL: 10, // Aumentado para 10
   PENALIDADE_HABILIDADE_NIVEL_ERRADO: -50,
   PENALIDADE_HABILIDADE_AREA_ERRADA: -40,
   PENALIDADE_HABILIDADE_ANO_ERRADO: -35,  // Novo: penalidade para ano/série errado
@@ -60,15 +62,24 @@ export function filtrarNodesPorRelevancia(
   
   const enrichedNodes = nodes.map((node): EnrichedNode => {
     const texto = node.node?.text?.toLowerCase() || '';
+    const temaLower = tema.toLowerCase().trim();
     
     let boostScore = 0;
     let penaltyScore = 0;
 
+    // 0. Boost por match exato do tema (frase completa)
+    if (texto.includes(temaLower)) {
+      boostScore += PONTUACAO.BOOST_TEMA_EXATO;
+    }
+
     // 1. Boost por palavras-chave do tema.
-    const palavrasChaveTema = tema.toLowerCase().split(' ').filter(p => p.length > 2);
+    // Aceita palavras > 2 letras OU palavras de 2 letras se estiverem na lista de exceções relevantes (ex: "to", "be", "fé")
+    const palavrasExcecao = ["to", "be", "fé", "up", "on", "in", "at", "by", "of"];
+    const palavrasChaveTema = temaLower.split(' ').filter(p => p.length > 2 || palavrasExcecao.includes(p));
+    
     for (const palavra of palavrasChaveTema) {
       if (texto.includes(palavra)) {
-        boostScore += 1;
+        boostScore += PONTUACAO.BOOST_TEMA_PARCIAL;
       }
     }
     
@@ -262,9 +273,9 @@ export function extrairHabilidadesBNCC(
     });
   }
   
-  // Retorna as 2 habilidades mais relevantes (as primeiras encontradas nos nós mais relevantes).
+  // Retorna as 15 habilidades mais relevantes (para garantir que a correta esteja presente)
   return habilidadesFiltradas
-    .slice(0, 2)
+    .slice(0, 15)
     .map(([codigo, descricao]) => ({
       codigo,
       descricao

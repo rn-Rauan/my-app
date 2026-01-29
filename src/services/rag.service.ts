@@ -26,19 +26,25 @@ async function initializeQueryEngine() {
     queryEngine = {
       index,
       async query(params: { query: string }): Promise<RAGQueryResult> {
+        console.log(`      🔎 Executando query no LlamaIndex: "${params.query}"`);
         const retriever = index.asRetriever({ 
-          similarityTopK: 20,
+          similarityTopK: 60, // Aumentado para 60 para melhorar recall
         });
         
         const nodes = await retriever.retrieve(params.query);
+        console.log(`      ✅ Query retornou ${nodes.length} nós.`);
+        
         const responseSynthesizer = index.asQueryEngine().responseSynthesizer;
+        // Ignoramos a síntese completa para economizar tokens, focando na recuperação
+        /*
         const response = await responseSynthesizer.synthesize({
           query: params.query,
           nodes,
         });
+        */
         
         return {
-          response: response.response,
+          response: "Síntese desativada para otimização",
           sourceNodes: nodes,
         };
       }
@@ -98,6 +104,8 @@ export async function consultarBNCC(
       `${serie} ${disciplina} ${tema} habilidades EF${codigoAno}${areaBNCC}`,
       `EF${codigoAno}${areaBNCC} ${disciplina} ${tema}`,
       `${anoEsperado}º ano ${disciplina} ${tema} objetos conhecimento`,
+      `${tema} EF${codigoAno}${areaBNCC}`, // Query focada em tema + código
+      disciplina.toLowerCase().includes("ingl") ? `${tema}` : `${tema} BNCC` // Query ampla ou específica para inglês
     );
   } else {
     // Queries genéricas para outros casos
@@ -114,12 +122,17 @@ export async function consultarBNCC(
   const results = [];
   for (let i = 0; i < queries.length; i++) {
     console.log(`   Query ${i + 1}: "${queries[i]}"`);
-    const response = await engine.query({ query: queries[i] });
-    results.push({
-      query: queries[i],
-      response: response.response,
-      nodes: response.sourceNodes || []
-    });
+    try {
+      const response = await engine.query({ query: queries[i] });
+      console.log(`   ✅ Query ${i + 1} concluída`);
+      results.push({
+        query: queries[i],
+        response: response.response,
+        nodes: response.sourceNodes || []
+      });
+    } catch (e) {
+      console.error(`   ❌ Erro na Query ${i + 1}:`, e);
+    }
   }
 
   // Agrega todos os nós retornados
